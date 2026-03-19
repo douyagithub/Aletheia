@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Canvas, FabricImage } from 'fabric'
+import { Canvas, FabricImage, FabricObject } from 'fabric'
 import axios from 'axios'
 
 const API_URL = 'http://localhost:8000'
@@ -13,7 +13,6 @@ interface ImageData {
 
 function App() {
   const [imageData, setImageData] = useState<ImageData | null>(null)
-  const [preview, setPreview] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [sessionId] = useState(() => `session_${Date.now()}`)
   
@@ -52,27 +51,26 @@ function App() {
 
       const res = await axios.post(`${API_URL}/upload`, formData)
       setImageData(res.data)
-      setPreview(res.data.preview || '')
       
       // Load image to canvas
       if (fabricRef.current && file) {
         const reader = new FileReader()
         reader.onload = (event) => {
           if (event.target?.result) {
-            FabricImage.fromURL(event.target.result as string).then((img) => {
+            FabricImage.fromURL(event.target.result as string).then((img: FabricObject) => {
               if (fabricRef.current) {
                 fabricRef.current.clear()
                 fabricRef.current.backgroundColor = '#f0f0f0'
                 
                 // Scale image to fit
                 const scale = Math.min(
-                  580 / (img.width || 1),
-                  380 / (img.height || 1)
+                  580 / ((img.width || 1) * (img.scaleX || 1)),
+                  380 / ((img.height || 1) * (img.scaleY || 1))
                 )
                 img.scale(scale)
                 img.set({
-                  left: (600 - (img.width || 0) * scale) / 2,
-                  top: (400 - (img.height || 0) * scale) / 2
+                  left: (600 - ((img.width || 0) * (img.scaleX || 1) * scale)) / 2,
+                  top: (400 - ((img.height || 0) * (img.scaleY || 1) * scale)) / 2
                 })
                 fabricRef.current.add(img)
                 fabricRef.current.renderAll()
@@ -82,8 +80,9 @@ function App() {
         }
         reader.readAsDataURL(file)
       }
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Upload failed')
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { detail?: string } } }
+      alert(error.response?.data?.detail || 'Upload failed')
     }
     setLoading(false)
   }
@@ -101,7 +100,20 @@ function App() {
       formData.append('temperature', temperature.toString())
 
       const res = await axios.post(`${API_URL}/adjust`, formData)
-      setPreview(res.data.preview)
+      
+      // Update canvas with new image
+      if (fabricRef.current && res.data.preview) {
+        FabricImage.fromURL(res.data.preview).then((img: FabricObject) => {
+          if (fabricRef.current) {
+            fabricRef.current.clear()
+            fabricRef.current.backgroundColor = '#f0f0f0'
+            const scale = Math.min(580 / (img.width || 1), 380 / (img.height || 1))
+            img.scale(scale)
+            fabricRef.current.add(img)
+            fabricRef.current.renderAll()
+          }
+        })
+      }
     } catch (err) {
       console.error(err)
     }
@@ -113,9 +125,22 @@ function App() {
     
     setLoading(true)
     try {
-      const res = await axios.post(`${API_URL}/filter/${filter}`, 
-        new FormData())
-      setPreview(res.data.preview)
+      const formData = new FormData()
+      formData.append('image_id', imageData.image_id)
+      const res = await axios.post(`${API_URL}/filter/${filter}`, formData)
+      
+      if (fabricRef.current && res.data.preview) {
+        FabricImage.fromURL(res.data.preview).then((img: FabricObject) => {
+          if (fabricRef.current) {
+            fabricRef.current.clear()
+            fabricRef.current.backgroundColor = '#f0f0f0'
+            const scale = Math.min(580 / (img.width || 1), 380 / (img.height || 1))
+            img.scale(scale)
+            fabricRef.current.add(img)
+            fabricRef.current.renderAll()
+          }
+        })
+      }
     } catch (err) {
       console.error(err)
     }
@@ -129,7 +154,19 @@ function App() {
     try {
       const res = await axios.post(`${API_URL}/ai-enhance`, 
         new FormData())
-      setPreview(res.data.preview)
+      
+      if (fabricRef.current && res.data.preview) {
+        FabricImage.fromURL(res.data.preview).then((img: FabricObject) => {
+          if (fabricRef.current) {
+            fabricRef.current.clear()
+            fabricRef.current.backgroundColor = '#f0f0f0'
+            const scale = Math.min(580 / (img.width || 1), 380 / (img.height || 1))
+            img.scale(scale)
+            fabricRef.current.add(img)
+            fabricRef.current.renderAll()
+          }
+        })
+      }
     } catch (err) {
       console.error(err)
     }
