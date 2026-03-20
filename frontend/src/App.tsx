@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Canvas, FabricImage, FabricObject } from 'fabric'
 import axios from 'axios'
 
-const API_URL = 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 interface ImageData {
   image_id: string
@@ -152,8 +152,9 @@ function App() {
     
     setLoading(true)
     try {
-      const res = await axios.post(`${API_URL}/ai-enhance`, 
-        new FormData())
+      const formData = new FormData()
+      formData.append('image_id', imageData.image_id)
+      const res = await axios.post(`${API_URL}/ai-enhance`, formData)
       
       if (fabricRef.current && res.data.preview) {
         FabricImage.fromURL(res.data.preview).then((img: FabricObject) => {
