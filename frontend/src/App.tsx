@@ -4,7 +4,7 @@ function App() {
   const [imageData, setImageData] = useState<{ file: File; url: string } | null>(null)
   const [loading, setLoading] = useState(false)
   
-  // Adjustments (0-100)
+  // Adjustments (default 100 = no change)
   const [brightness, setBrightness] = useState(100)
   const [contrast, setContrast] = useState(100)
   const [saturation, setSaturation] = useState(100)
@@ -14,66 +14,74 @@ function App() {
   
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const originalImageRef = useRef<HTMLImageElement | null>(null)
-  const ctxRef = useRef<CanvasRenderingContext2D | null>(null)
-
-  useEffect(() => {
-    if (canvasRef.current) {
-      ctxRef.current = canvasRef.current.getContext('2d')
-    }
-  }, [])
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const applyFilters = useCallback(() => {
-    const ctx = ctxRef.current
-    const img = originalImageRef.current
-    if (!ctx || !img || !canvasRef.current) return
-
     const canvas = canvasRef.current
-    const w = img.naturalWidth
-    const h = img.naturalHeight
-    
-    canvas.width = w
-    canvas.height = h
+    const img = originalImageRef.current
+    if (!canvas || !img) return
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    // Set canvas to image size
+    canvas.width = img.naturalWidth
+    canvas.height = img.naturalHeight
 
     // Build CSS filter string
-    const filters: string[] = []
-    filters.push(`brightness(${brightness}%)`)
-    filters.push(`contrast(${contrast}%)`)
-    filters.push(`saturate(${saturation}%)`)
-    filters.push(`sepia(${sepia}%)`)
-    filters.push(`blur(${blur}px)`)
+    let filterStr = `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) sepia(${sepia}%) blur(${blur}px)`
+    ctx.filter = filterStr
     
-    ctx.filter = filters.join(' ')
-    ctx.drawImage(img, 0, 0, w, h)
+    // Draw image
+    ctx.drawImage(img, 0, 0)
     
-    // Sharpening via convolution (if needed)
-    if (sharpen > 0 && w > 0 && h > 0) {
-      sharpenImage(ctx, w, h, sharpen / 100)
+    // Apply sharpen manually if needed
+    if (sharpen > 0) {
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const data = imageData.data
+      const w = canvas.width
+      const h = canvas.height
+      const amount = sharpen / 100
+      
+      // Simple sharpen kernel
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const i = (y * w + x) * 4
+          const iL = (y * w + x - 1) * 4
+          const iR = (y * w + x + 1) * 4
+          const iT = ((y - 1) * w + x) * 4
+          const iB = ((y + 1) * w + x) * 4
+          
+          for (let c = 0; c < 3; c++) {
+            const center = data[i + c]
+            const neighbors = (data[iL + c] + data[iR + c] + data[iT + c] + data[iB + c]) / 4
+            data[i + c] = Math.min(255, Math.max(0, center + (center - neighbors) * amount * 3))
+          }
+        }
+      }
+      ctx.putImageData(imageData, 0, 0)
     }
   }, [brightness, contrast, saturation, sepia, blur, sharpen])
 
-  const sharpenImage = (ctx: CanvasRenderingContext2D, w: number, h: number, amount: number) => {
-    const imageData = ctx.getImageData(0, 0, w, h)
-    const data = imageData.data
-    const factor = amount * 2
-    
-    // Simple unsharp mask approximation
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const i = (y * w + x) * 4
-        const iL = (y * w + x - 1) * 4
-        const iR = (y * w + x + 1) * 4
-        const iT = ((y - 1) * w + x) * 4
-        const iB = ((y + 1) * w + x) * 4
-        
-        for (let c = 0; c < 3; c++) {
-          const center = data[i + c]
-          const neighbors = (data[iL + c] + data[iR + c] + data[iT + c] + data[iB + c]) / 4
-          data[i + c] = Math.min(255, Math.max(0, center + (center - neighbors) * factor))
-        }
+  // Load and display image
+  useEffect(() => {
+    if (imageData) {
+      const img = new Image()
+      img.onload = () => {
+        originalImageRef.current = img
+        // Small delay to ensure canvas is ready
+        setTimeout(applyFilters, 100)
       }
+      img.src = imageData.url
     }
-    ctx.putImageData(imageData, 0, 0)
-  }
+  }, [imageData])
+
+  // Apply filters when parameters change
+  useEffect(() => {
+    if (originalImageRef.current) {
+      applyFilters()
+    }
+  }, [brightness, contrast, saturation, sepia, blur, sharpen, applyFilters])
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -87,9 +95,9 @@ function App() {
     setLoading(true)
     const url = URL.createObjectURL(file)
     
+    // Test image loads
     const img = new Image()
     img.onload = () => {
-      originalImageRef.current = img
       setImageData({ file, url })
       
       // Reset filters
@@ -100,8 +108,6 @@ function App() {
       setBlur(0)
       setSharpen(0)
       
-      // Draw initial image
-      setTimeout(applyFilters, 50)
       setLoading(false)
     }
     img.onerror = () => {
@@ -114,51 +120,87 @@ function App() {
   const handleFilter = (filter: string) => {
     switch (filter) {
       case 'vintage':
-        setSepia(50)
+        setBrightness(100)
         setContrast(120)
         setSaturation(70)
+        setSepia(50)
+        setBlur(0)
+        setSharpen(0)
         break
       case 'cool':
-        setSepia(0)
+        setBrightness(105)
         setContrast(110)
         setSaturation(120)
-        setBrightness(105)
+        setSepia(0)
+        setBlur(0)
+        setSharpen(0)
         break
       case 'warm':
-        setSepia(40)
+        setBrightness(105)
+        setContrast(100)
         setSaturation(130)
+        setSepia(40)
+        setBlur(0)
+        setSharpen(0)
         break
       case 'sharpen':
+        setBrightness(100)
+        setContrast(100)
+        setSaturation(100)
+        setSepia(0)
+        setBlur(0)
         setSharpen(80)
         break
       case 'blur':
+        setBrightness(100)
+        setContrast(100)
+        setSaturation(100)
+        setSepia(0)
         setBlur(3)
+        setSharpen(0)
         break
       case 'bright':
         setBrightness(130)
         setContrast(110)
+        setSaturation(120)
+        setSepia(0)
+        setBlur(0)
+        setSharpen(0)
         break
       case 'dramatic':
-        setContrast(150)
         setBrightness(90)
+        setContrast(150)
+        setSaturation(100)
+        setSepia(0)
+        setBlur(0)
+        setSharpen(0)
         break
       case 'bw':
+        setBrightness(100)
+        setContrast(110)
         setSaturation(0)
+        setSepia(0)
+        setBlur(0)
+        setSharpen(0)
         break
       case 'vivid':
-        setSaturation(160)
+        setBrightness(105)
         setContrast(115)
+        setSaturation(160)
+        setSepia(0)
+        setBlur(0)
+        setSharpen(0)
         break
     }
-    setTimeout(applyFilters, 50)
   }
 
   const handleAIEnhance = () => {
     setBrightness(110)
     setContrast(120)
     setSaturation(130)
+    setSepia(0)
+    setBlur(0)
     setSharpen(30)
-    setTimeout(applyFilters, 50)
   }
 
   const handleReset = () => {
@@ -168,15 +210,24 @@ function App() {
     setSepia(0)
     setBlur(0)
     setSharpen(0)
-    setTimeout(applyFilters, 50)
   }
 
   const handleDownload = () => {
-    if (!canvasRef.current) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    
+    // Create a temporary canvas for clean export
+    const tempCanvas = document.createElement('canvas')
+    tempCanvas.width = canvas.width
+    tempCanvas.height = canvas.height
+    const tempCtx = tempCanvas.getContext('2d')
+    if (!tempCtx) return
+    
+    tempCtx.drawImage(canvas, 0, 0)
     
     const link = document.createElement('a')
     link.download = 'edited-image.jpg'
-    link.href = canvasRef.current.toDataURL('image/jpeg', 0.95)
+    link.href = tempCanvas.toDataURL('image/jpeg', 0.95)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -238,10 +289,7 @@ function App() {
                 <input
                   type="range" min="0" max="200" step="1"
                   value={brightness}
-                  onChange={(e) => {
-                    setBrightness(parseInt(e.target.value))
-                    applyFilters()
-                  }}
+                  onChange={(e) => setBrightness(parseInt(e.target.value))}
                   className="w-full"
                 />
               </div>
@@ -253,10 +301,7 @@ function App() {
                 <input
                   type="range" min="0" max="200" step="1"
                   value={contrast}
-                  onChange={(e) => {
-                    setContrast(parseInt(e.target.value))
-                    applyFilters()
-                  }}
+                  onChange={(e) => setContrast(parseInt(e.target.value))}
                   className="w-full"
                 />
               </div>
@@ -268,10 +313,7 @@ function App() {
                 <input
                   type="range" min="0" max="200" step="1"
                   value={saturation}
-                  onChange={(e) => {
-                    setSaturation(parseInt(e.target.value))
-                    applyFilters()
-                  }}
+                  onChange={(e) => setSaturation(parseInt(e.target.value))}
                   className="w-full"
                 />
               </div>
@@ -283,10 +325,7 @@ function App() {
                 <input
                   type="range" min="0" max="100" step="1"
                   value={sepia}
-                  onChange={(e) => {
-                    setSepia(parseInt(e.target.value))
-                    applyFilters()
-                  }}
+                  onChange={(e) => setSepia(parseInt(e.target.value))}
                   className="w-full"
                 />
               </div>
@@ -298,10 +337,7 @@ function App() {
                 <input
                   type="range" min="0" max="10" step="0.5"
                   value={blur}
-                  onChange={(e) => {
-                    setBlur(parseFloat(e.target.value))
-                    applyFilters()
-                  }}
+                  onChange={(e) => setBlur(parseFloat(e.target.value))}
                   className="w-full"
                 />
               </div>
@@ -349,10 +385,18 @@ function App() {
               <p className="text-gray-500">Loading...</p>
             </div>
           ) : imageData ? (
-            <div className="flex justify-center items-center overflow-auto">
-              <canvas 
-                ref={canvasRef} 
-                style={{ maxWidth: '100%', maxHeight: '500px' }}
+            <div 
+              ref={containerRef}
+              className="flex justify-center items-center overflow-auto"
+              style={{ minHeight: '400px' }}
+            >
+              <canvas
+                ref={canvasRef}
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '500px',
+                  border: '1px solid #e5e7eb'
+                }}
               />
             </div>
           ) : (
