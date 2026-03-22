@@ -1,29 +1,25 @@
-import { useState, useRef, useEffect } from 'react'
-import { Canvas, FabricImage, FabricObject } from 'fabric'
-import axios from 'axios'
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { Canvas, FabricImage, FabricObject, filters } from 'fabric'
 
 interface ImageData {
-  image_id: string
-  quota_remaining: number
-  is_free: boolean
-  price: number
+  file: File
+  originalUrl: string
 }
 
 function App() {
   const [imageData, setImageData] = useState<ImageData | null>(null)
   const [loading, setLoading] = useState(false)
-  const [sessionId] = useState(() => `session_${Date.now()}`)
   
   // Adjustment values
-  const [brightness, setBrightness] = useState(1)
-  const [contrast, setContrast] = useState(1)
-  const [saturation, setSaturation] = useState(1)
+  const [brightness, setBrightness] = useState(0)
+  const [contrast, setContrast] = useState(0)
+  const [saturation, setSaturation] = useState(0)
   const [temperature, setTemperature] = useState(0)
+  const [sharpness, setSharpness] = useState(0)
   
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fabricRef = useRef<Canvas | null>(null)
+  const fabricImageRef = useRef<FabricImage | null>(null)
 
   // Initialize Fabric canvas
   useEffect(() => {
@@ -39,158 +35,201 @@ function App() {
     }
   }, [])
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const applyFilters = useCallback(() => {
+    if (!fabricImageRef.current) return
+    
+    const img = fabricImageRef.current
+    
+    // Apply brightness (-100 to 100)
+    const brightnessFilter = new filters.Brightness({ brightness: brightness / 100 })
+    
+    // Apply contrast (-100 to 100)
+    const contrastFilter = new filters.Contrast({ contrast: contrast / 100 })
+    
+    // Apply saturation (-100 to 100)
+    const saturationFilter = new filters.Saturation({ saturation: saturation / 100 })
+    
+    // Apply sharpness (0 to 100)
+    const sharpnessFilter = new filters.Sharpen({ sharpness: sharpness / 100 })
+    
+    // Temperature via Sepia (warm) or none + hue rotation (cool)
+    let temperatureFilter: filters.Filter | null = null
+    if (temperature > 0) {
+      // Warm: slight sepia
+      temperatureFilter = new filters.Sepia()
+    } else if (temperature < 0) {
+      // Cool: use Noise to simulate cool tone effect
+      temperatureFilter = new filters.Noise({ noise: Math.abs(temperature) / 5 })
+    }
+
+    // Apply all filters
+    img.filters = [
+      brightnessFilter,
+      contrastFilter,
+      saturationFilter,
+      sharpnessFilter,
+      ...(temperatureFilter ? [temperatureFilter] : [])
+    ].filter(Boolean)
+    
+    img.applyFilters()
+    fabricRef.current?.renderAll()
+  }, [brightness, contrast, saturation, temperature, sharpness])
+
+  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    setLoading(true)
-    try {
-      const formData = new FormData()
-      formData.append('session_id', sessionId)
-      formData.append('file', file)
+    // Validate file
+    if (file.size > 20 * 1024 * 1024) {
+      alert('File too large (max 20MB)')
+      return
+    }
 
-      const res = await axios.post(`${API_URL}/upload`, formData)
-      setImageData(res.data)
+    const url = URL.createObjectURL(file)
+    setImageData({ file, originalUrl: url })
+    
+    // Load image to canvas
+    if (fabricRef.current) {
+      fabricRef.current.clear()
+      fabricRef.current.backgroundColor = '#f0f0f0'
       
-      // Load image to canvas
-      if (fabricRef.current && file) {
-        const reader = new FileReader()
-        reader.onload = (event) => {
-          if (event.target?.result) {
-            FabricImage.fromURL(event.target.result as string).then((img: FabricObject) => {
-              if (fabricRef.current) {
-                fabricRef.current.clear()
-                fabricRef.current.backgroundColor = '#f0f0f0'
-                
-                // Scale image to fit
-                const scale = Math.min(
-                  580 / ((img.width || 1) * (img.scaleX || 1)),
-                  380 / ((img.height || 1) * (img.scaleY || 1))
-                )
-                img.scale(scale)
-                img.set({
-                  left: (600 - ((img.width || 0) * (img.scaleX || 1) * scale)) / 2,
-                  top: (400 - ((img.height || 0) * (img.scaleY || 1) * scale)) / 2
-                })
-                fabricRef.current.add(img)
-                fabricRef.current.renderAll()
-              }
-            })
-          }
+      FabricImage.fromURL(url).then((img: FabricImage) => {
+        if (fabricRef.current) {
+          // Scale image to fit
+          const maxWidth = 580
+          const maxHeight = 380
+          const scale = Math.min(
+            maxWidth / (img.width || 1),
+            maxHeight / (img.height || 1)
+          )
+          
+          img.scale(scale)
+          img.set({
+            left: (600 - ((img.width || 0) * (img.scaleX || 1))) / 2,
+            top: (400 - ((img.height || 0) * (img.scaleY || 1))) / 2,
+            selectable: false
+          })
+          
+          fabricImageRef.current = img
+          fabricRef.current.add(img)
+          fabricRef.current.renderAll()
         }
-        reader.readAsDataURL(file)
-      }
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } } }
-      alert(error.response?.data?.detail || 'Upload failed')
-    }
-    setLoading(false)
-  }
-
-  const handleAdjust = async () => {
-    if (!imageData) return
-    
-    setLoading(true)
-    try {
-      const formData = new FormData()
-      formData.append('image_id', imageData.image_id)
-      formData.append('brightness', brightness.toString())
-      formData.append('contrast', contrast.toString())
-      formData.append('saturation', saturation.toString())
-      formData.append('temperature', temperature.toString())
-
-      const res = await axios.post(`${API_URL}/adjust`, formData)
-      
-      // Update canvas with new image
-      if (fabricRef.current && res.data.preview) {
-        FabricImage.fromURL(res.data.preview).then((img: FabricObject) => {
-          if (fabricRef.current) {
-            fabricRef.current.clear()
-            fabricRef.current.backgroundColor = '#f0f0f0'
-            const scale = Math.min(580 / (img.width || 1), 380 / (img.height || 1))
-            img.scale(scale)
-            fabricRef.current.add(img)
-            fabricRef.current.renderAll()
-          }
-        })
-      }
-    } catch (err) {
-      console.error(err)
-    }
-    setLoading(false)
-  }
-
-  const handleFilter = async (filter: string) => {
-    if (!imageData) return
-    
-    setLoading(true)
-    try {
-      const formData = new FormData()
-      formData.append('image_id', imageData.image_id)
-      const res = await axios.post(`${API_URL}/filter/${filter}`, formData)
-      
-      if (fabricRef.current && res.data.preview) {
-        FabricImage.fromURL(res.data.preview).then((img: FabricObject) => {
-          if (fabricRef.current) {
-            fabricRef.current.clear()
-            fabricRef.current.backgroundColor = '#f0f0f0'
-            const scale = Math.min(580 / (img.width || 1), 380 / (img.height || 1))
-            img.scale(scale)
-            fabricRef.current.add(img)
-            fabricRef.current.renderAll()
-          }
-        })
-      }
-    } catch (err) {
-      console.error(err)
-    }
-    setLoading(false)
-  }
-
-  const handleAIEnhance = async () => {
-    if (!imageData) return
-    
-    setLoading(true)
-    try {
-      const formData = new FormData()
-      formData.append('image_id', imageData.image_id)
-      const res = await axios.post(`${API_URL}/ai-enhance`, formData)
-      
-      if (fabricRef.current && res.data.preview) {
-        FabricImage.fromURL(res.data.preview).then((img: FabricObject) => {
-          if (fabricRef.current) {
-            fabricRef.current.clear()
-            fabricRef.current.backgroundColor = '#f0f0f0'
-            const scale = Math.min(580 / (img.width || 1), 380 / (img.height || 1))
-            img.scale(scale)
-            fabricRef.current.add(img)
-            fabricRef.current.renderAll()
-          }
-        })
-      }
-    } catch (err) {
-      console.error(err)
-    }
-    setLoading(false)
-  }
-
-  const handleDownload = async () => {
-    if (!imageData) return
-    
-    try {
-      const res = await axios.get(`${API_URL}/download/${imageData.image_id}`, {
-        responseType: 'blob'
       })
-      const url = window.URL.createObjectURL(new Blob([res.data]))
-      const link = document.createElement('a')
-      link.href = url
-      link.setAttribute('download', 'edited_image.jpg')
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-    } catch (err) {
-      console.error(err)
     }
+  }
+
+  const handleFilter = (filterType: string) => {
+    if (!fabricImageRef.current) return
+    
+    const img = fabricImageRef.current
+    
+    // Clear existing filters first
+    img.filters = []
+    
+    switch (filterType) {
+      case 'vintage':
+        img.filters = [
+          new filters.Sepia(),
+          new filters.Contrast({ contrast: 0.1 }),
+          new filters.Saturation({ saturation: -0.3 })
+        ]
+        break
+      case 'cool':
+        img.filters = [
+          new filters.Contrast({ contrast: 0.05 }),
+          new filters.Saturation({ saturation: 0.1 })
+        ]
+        // Apply slight blue tint via hue rotation
+        break
+      case 'warm':
+        img.filters = [
+          new filters.Sepia({ sepia: 0.3 }),
+          new filters.Saturation({ saturation: 0.2 })
+        ]
+        break
+      case 'sharpen':
+        img.filters = [
+          new filters.Sharpen({ sharpness: 0.5 })
+        ]
+        break
+      case 'blur':
+        img.filters = [
+          new filters.Blur({ blur: 0.3 })
+        ]
+        break
+      case 'bright':
+        img.filters = [
+          new filters.Brightness({ brightness: 0.2 }),
+          new filters.Saturation({ saturation: 0.1 })
+        ]
+        break
+      case 'dramatic':
+        img.filters = [
+          new filters.Contrast({ contrast: 0.3 }),
+          new filters.Brightness({ brightness: -0.05 })
+        ]
+        break
+      case 'bw':
+        img.filters = [
+          new filters.Grayscale()
+        ]
+        break
+      case 'vivid':
+        img.filters = [
+          new filters.Saturation({ saturation: 0.5 })
+        ]
+        break
+    }
+    
+    img.applyFilters()
+    fabricRef.current?.renderAll()
+  }
+
+  const handleAIEnhance = () => {
+    // Simple auto-enhance simulation
+    setBrightness(10)
+    setContrast(15)
+    setSaturation(10)
+    setSharpness(20)
+    
+    setTimeout(() => {
+      applyFilters()
+    }, 100)
+  }
+
+  const handleReset = () => {
+    setBrightness(0)
+    setContrast(0)
+    setSaturation(0)
+    setTemperature(0)
+    setSharpness(0)
+    
+    if (fabricImageRef.current) {
+      fabricImageRef.current.filters = []
+      fabricImageRef.current.applyFilters()
+      fabricRef.current?.renderAll()
+    }
+  }
+
+  const handleDownload = () => {
+    if (!fabricRef.current) return
+    
+    // Deselect everything for clean export
+    fabricRef.current.discardActiveObject()
+    fabricRef.current.renderAll()
+    
+    const dataUrl = fabricRef.current.toDataURL({
+      format: 'jpeg',
+      quality: 0.95,
+      multiplier: 2
+    })
+    
+    const link = document.createElement('a')
+    link.download = 'edited_image.jpg'
+    link.href = dataUrl
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
   }
 
   const filters = [
@@ -201,6 +240,8 @@ function App() {
     { name: 'blur', label: 'Blur' },
     { name: 'bright', label: 'Bright' },
     { name: 'dramatic', label: 'Dramatic' },
+    { name: 'bw', label: 'B&W' },
+    { name: 'vivid', label: 'Vivid' },
   ]
 
   return (
@@ -213,8 +254,7 @@ function App() {
             {imageData && (
               <>
                 <span className="text-sm text-gray-600">
-                  Free quota: {imageData.quota_remaining} | 
-                  {imageData.is_free ? ' Free' : ` $${imageData.price}`}
+                  ✓ Free to use
                 </span>
                 <button
                   onClick={handleDownload}
@@ -236,7 +276,7 @@ function App() {
             <h3 className="font-semibold mb-3">Upload</h3>
             <input
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp"
               onChange={handleUpload}
               className="w-full text-sm"
             />
@@ -249,45 +289,54 @@ function App() {
               <div>
                 <label className="text-sm flex justify-between">
                   <span>Brightness</span>
-                  <span>{brightness.toFixed(1)}</span>
+                  <span>{brightness}</span>
                 </label>
                 <input
                   type="range"
-                  min="0.5"
-                  max="2"
-                  step="0.1"
+                  min="-100"
+                  max="100"
+                  step="1"
                   value={brightness}
-                  onChange={(e) => setBrightness(parseFloat(e.target.value))}
+                  onChange={(e) => {
+                    setBrightness(parseInt(e.target.value))
+                    applyFilters()
+                  }}
                   className="w-full"
                 />
               </div>
               <div>
                 <label className="text-sm flex justify-between">
                   <span>Contrast</span>
-                  <span>{contrast.toFixed(1)}</span>
+                  <span>{contrast}</span>
                 </label>
                 <input
                   type="range"
-                  min="0.5"
-                  max="2"
-                  step="0.1"
+                  min="-100"
+                  max="100"
+                  step="1"
                   value={contrast}
-                  onChange={(e) => setContrast(parseFloat(e.target.value))}
+                  onChange={(e) => {
+                    setContrast(parseInt(e.target.value))
+                    applyFilters()
+                  }}
                   className="w-full"
                 />
               </div>
               <div>
                 <label className="text-sm flex justify-between">
                   <span>Saturation</span>
-                  <span>{saturation.toFixed(1)}</span>
+                  <span>{saturation}</span>
                 </label>
                 <input
                   type="range"
-                  min="0"
-                  max="2"
-                  step="0.1"
+                  min="-100"
+                  max="100"
+                  step="1"
                   value={saturation}
-                  onChange={(e) => setSaturation(parseFloat(e.target.value))}
+                  onChange={(e) => {
+                    setSaturation(parseInt(e.target.value))
+                    applyFilters()
+                  }}
                   className="w-full"
                 />
               </div>
@@ -298,20 +347,41 @@ function App() {
                 </label>
                 <input
                   type="range"
-                  min="-10"
-                  max="10"
+                  min="-100"
+                  max="100"
                   step="1"
                   value={temperature}
-                  onChange={(e) => setTemperature(parseInt(e.target.value))}
+                  onChange={(e) => {
+                    setTemperature(parseInt(e.target.value))
+                    applyFilters()
+                  }}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="text-sm flex justify-between">
+                  <span>Sharpness</span>
+                  <span>{sharpness}</span>
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={sharpness}
+                  onChange={(e) => {
+                    setSharpness(parseInt(e.target.value))
+                    applyFilters()
+                  }}
                   className="w-full"
                 />
               </div>
               <button
-                onClick={handleAdjust}
-                disabled={!imageData || loading}
-                className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 disabled:opacity-50"
+                onClick={handleReset}
+                disabled={!imageData}
+                className="w-full bg-gray-500 text-white py-2 rounded hover:bg-gray-600 disabled:opacity-50"
               >
-                Apply Adjustments
+                Reset
               </button>
             </div>
           </div>
@@ -324,7 +394,7 @@ function App() {
                 <button
                   key={f.name}
                   onClick={() => handleFilter(f.name)}
-                  disabled={!imageData || loading}
+                  disabled={!imageData}
                   className="text-sm bg-gray-100 py-2 rounded hover:bg-gray-200 disabled:opacity-50"
                 >
                   {f.label}
@@ -338,10 +408,10 @@ function App() {
             <h3 className="font-semibold mb-3">AI Tools</h3>
             <button
               onClick={handleAIEnhance}
-              disabled={!imageData || loading}
+              disabled={!imageData}
               className="w-full bg-purple-500 text-white py-2 rounded hover:bg-purple-600 disabled:opacity-50"
             >
-              ✨ AI Enhance
+              ✨ Auto Enhance
             </button>
           </div>
         </aside>
@@ -357,6 +427,7 @@ function App() {
               <div className="text-center text-gray-500">
                 <p className="text-4xl mb-2">📷</p>
                 <p>Upload an image to start editing</p>
+                <p className="text-sm mt-2">Supports JPG, PNG, WebP (max 20MB)</p>
               </div>
             </div>
           )}
