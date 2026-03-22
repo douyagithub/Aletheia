@@ -1,130 +1,78 @@
-import { useState, useRef, useEffect } from 'react'
-import { Canvas, FabricImage, FabricObject } from 'fabric'
-
-interface ImageData {
-  file: File
-  originalUrl: string
-}
-
-// Filter definitions matching Fabric.js v7 API
-const filterConfigs: Record<string, any[]> = {
-  vintage: [
-    { type: 'Sepia', sepia: 0.6 },
-    { type: 'Contrast', contrast: 0.15 },
-    { type: 'Saturation', saturation: -0.4 }
-  ],
-  cool: [
-    { type: 'Contrast', contrast: 0.1 },
-    { type: 'Saturation', saturation: 0.15 },
-    { type: 'Noise', noise: 8 }
-  ],
-  warm: [
-    { type: 'Sepia', sepia: 0.4 },
-    { type: 'Saturation', saturation: 0.3 },
-    { type: 'Brightness', brightness: 0.05 }
-  ],
-  sharpen: [
-    { type: 'Sharpen', sharpness: 0.8 }
-  ],
-  blur: [
-    { type: 'Blur', blur: 0.4 }
-  ],
-  bright: [
-    { type: 'Brightness', brightness: 0.25 },
-    { type: 'Contrast', contrast: 0.1 },
-    { type: 'Saturation', saturation: 0.2 }
-  ],
-  dramatic: [
-    { type: 'Contrast', contrast: 0.35 },
-    { type: 'Brightness', brightness: -0.08 }
-  ],
-  bw: [
-    { type: 'Grayscale' }
-  ],
-  vivid: [
-    { type: 'Saturation', saturation: 0.6 },
-    { type: 'Contrast', contrast: 0.1 }
-  ]
-}
+import { useState, useRef, useEffect, useCallback } from 'react'
 
 function App() {
-  const [imageData, setImageData] = useState<ImageData | null>(null)
+  const [imageData, setImageData] = useState<{ file: File; url: string } | null>(null)
+  const [loading, setLoading] = useState(false)
   
-  // Adjustment values (0-100 scale for UI)
-  const [brightness, setBrightness] = useState(50)
-  const [contrast, setContrast] = useState(50)
-  const [saturation, setSaturation] = useState(50)
-  const [temperature, setTemperature] = useState(50)
-  const [sharpness, setSharpness] = useState(0)
+  // Adjustments (0-100)
+  const [brightness, setBrightness] = useState(100)
+  const [contrast, setContrast] = useState(100)
+  const [saturation, setSaturation] = useState(100)
+  const [sepia, setSepia] = useState(0)
+  const [blur, setBlur] = useState(0)
+  const [sharpen, setSharpen] = useState(0)
   
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const fabricRef = useRef<Canvas | null>(null)
-  const fabricImageRef = useRef<FabricImage | null>(null)
+  const originalImageRef = useRef<HTMLImageElement | null>(null)
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null)
 
-  // Initialize Fabric canvas
   useEffect(() => {
-    if (canvasRef.current && !fabricRef.current) {
-      fabricRef.current = new Canvas(canvasRef.current, {
-        width: 600,
-        height: 400,
-        backgroundColor: '#f3f4f6'
-      })
-    }
-    return () => {
-      fabricRef.current?.dispose()
+    if (canvasRef.current) {
+      ctxRef.current = canvasRef.current.getContext('2d')
     }
   }, [])
 
-  const applyAdjustments = () => {
-    if (!fabricImageRef.current) return
+  const applyFilters = useCallback(() => {
+    const ctx = ctxRef.current
+    const img = originalImageRef.current
+    if (!ctx || !img || !canvasRef.current) return
+
+    const canvas = canvasRef.current
+    const w = img.naturalWidth
+    const h = img.naturalHeight
     
-    const img = fabricImageRef.current
+    canvas.width = w
+    canvas.height = h
+
+    // Build CSS filter string
+    const filters: string[] = []
+    filters.push(`brightness(${brightness}%)`)
+    filters.push(`contrast(${contrast}%)`)
+    filters.push(`saturate(${saturation}%)`)
+    filters.push(`sepia(${sepia}%)`)
+    filters.push(`blur(${blur}px)`)
     
-    // Convert 0-100 scale to Fabric.js filter values
-    // Brightness: 0-100 -> -0.5 to 0.5
-    const bValue = (brightness - 50) / 100
-    // Contrast: 0-100 -> -0.5 to 0.5  
-    const cValue = (contrast - 50) / 100
-    // Saturation: 0-100 -> -1 to 1
-    const sValue = (saturation - 50) / 50
-    // Sharpness: 0-100 -> 0 to 1
-    const shValue = sharpness / 100
+    ctx.filter = filters.join(' ')
+    ctx.drawImage(img, 0, 0, w, h)
     
-    // Build filters array
-    const filters: any[] = []
-    
-    if (Math.abs(bValue) > 0.01) {
-      filters.push({ type: 'Brightness', brightness: bValue })
+    // Sharpening via convolution (if needed)
+    if (sharpen > 0 && w > 0 && h > 0) {
+      sharpenImage(ctx, w, h, sharpen / 100)
     }
-    if (Math.abs(cValue) > 0.01) {
-      filters.push({ type: 'Contrast', contrast: cValue })
-    }
-    if (Math.abs(sValue) > 0.01) {
-      filters.push({ type: 'Saturation', saturation: sValue })
-    }
-    if (shValue > 0.01) {
-      filters.push({ type: 'Sharpen', sharpness: shValue })
-    }
+  }, [brightness, contrast, saturation, sepia, blur, sharpen])
+
+  const sharpenImage = (ctx: CanvasRenderingContext2D, w: number, h: number, amount: number) => {
+    const imageData = ctx.getImageData(0, 0, w, h)
+    const data = imageData.data
+    const factor = amount * 2
     
-    // Temperature: warm (sepia) or cool (noise + blue)
-    const tValue = temperature - 50
-    if (tValue > 5) {
-      // Warm - apply sepia
-      filters.push({ type: 'Sepia', sepia: tValue / 100 })
-    } else if (tValue < -5) {
-      // Cool - apply noise + invert hue
-      filters.push({ type: 'Noise', noise: Math.abs(tValue) / 20 })
+    // Simple unsharp mask approximation
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = (y * w + x) * 4
+        const iL = (y * w + x - 1) * 4
+        const iR = (y * w + x + 1) * 4
+        const iT = ((y - 1) * w + x) * 4
+        const iB = ((y + 1) * w + x) * 4
+        
+        for (let c = 0; c < 3; c++) {
+          const center = data[i + c]
+          const neighbors = (data[iL + c] + data[iR + c] + data[iT + c] + data[iB + c]) / 4
+          data[i + c] = Math.min(255, Math.max(0, center + (center - neighbors) * factor))
+        }
+      }
     }
-    
-    // Apply filters using Fabric.js v7 syntax
-    img.filters = filters.map(f => {
-      const { type, ...params } = f
-      // @ts-ignore - Fabric.js dynamic filter creation
-      return new fabric.Image.filters[type](params)
-    })
-    
-    img.applyFilters()
-    fabricRef.current?.renderAll()
+    ctx.putImageData(imageData, 0, 0)
   }
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -136,105 +84,99 @@ function App() {
       return
     }
 
+    setLoading(true)
     const url = URL.createObjectURL(file)
-    setImageData({ file, originalUrl: url })
     
-    // Reset sliders
-    setBrightness(50)
-    setContrast(50)
-    setSaturation(50)
-    setTemperature(50)
-    setSharpness(0)
-    
-    // Load image to canvas
-    if (fabricRef.current) {
-      fabricRef.current.clear()
-      fabricRef.current.backgroundColor = '#f3f4f6'
+    const img = new Image()
+    img.onload = () => {
+      originalImageRef.current = img
+      setImageData({ file, url })
       
-      FabricImage.fromURL(url).then((img: FabricImage) => {
-        if (!fabricRef.current) return
-        
-        // Scale to fit
-        const maxW = 580
-        const maxH = 380
-        const scale = Math.min(maxW / (img.width || 1), maxH / (img.height || 1), 1)
-        
-        img.scale(scale)
-        img.set({
-          left: (600 - (img.width! * scale)) / 2,
-          top: (400 - (img.height! * scale)) / 2,
-          selectable: false
-        })
-        
-        fabricImageRef.current = img
-        fabricRef.current.add(img)
-        fabricRef.current.renderAll()
-      }).catch(err => {
-        console.error('Failed to load image:', err)
-        alert('Failed to load image')
-      })
+      // Reset filters
+      setBrightness(100)
+      setContrast(100)
+      setSaturation(100)
+      setSepia(0)
+      setBlur(0)
+      setSharpen(0)
+      
+      // Draw initial image
+      setTimeout(applyFilters, 50)
+      setLoading(false)
     }
+    img.onerror = () => {
+      alert('Failed to load image')
+      setLoading(false)
+    }
+    img.src = url
   }
 
-  const handleFilter = (filterType: string) => {
-    if (!fabricImageRef.current) return
-    
-    const img = fabricImageRef.current
-    const config = filterConfigs[filterType]
-    if (!config) return
-    
-    // Build filters from config
-    img.filters = config.map(f => {
-      const { type, ...params } = f
-      // @ts-ignore
-      return new fabric.Image.filters[type](params)
-    })
-    
-    img.applyFilters()
-    fabricRef.current?.renderAll()
+  const handleFilter = (filter: string) => {
+    switch (filter) {
+      case 'vintage':
+        setSepia(50)
+        setContrast(120)
+        setSaturation(70)
+        break
+      case 'cool':
+        setSepia(0)
+        setContrast(110)
+        setSaturation(120)
+        setBrightness(105)
+        break
+      case 'warm':
+        setSepia(40)
+        setSaturation(130)
+        break
+      case 'sharpen':
+        setSharpen(80)
+        break
+      case 'blur':
+        setBlur(3)
+        break
+      case 'bright':
+        setBrightness(130)
+        setContrast(110)
+        break
+      case 'dramatic':
+        setContrast(150)
+        setBrightness(90)
+        break
+      case 'bw':
+        setSaturation(0)
+        break
+      case 'vivid':
+        setSaturation(160)
+        setContrast(115)
+        break
+    }
+    setTimeout(applyFilters, 50)
   }
 
   const handleAIEnhance = () => {
-    // Auto-enhance: boost clarity and vibrancy
-    setBrightness(60)
-    setContrast(65)
-    setSaturation(65)
-    setTemperature(50)
-    setSharpness(40)
-    
-    setTimeout(applyAdjustments, 50)
+    setBrightness(110)
+    setContrast(120)
+    setSaturation(130)
+    setSharpen(30)
+    setTimeout(applyFilters, 50)
   }
 
   const handleReset = () => {
-    setBrightness(50)
-    setContrast(50)
-    setSaturation(50)
-    setTemperature(50)
-    setSharpness(0)
-    
-    if (fabricImageRef.current) {
-      fabricImageRef.current.filters = []
-      fabricImageRef.current.applyFilters()
-      fabricRef.current?.renderAll()
-    }
+    setBrightness(100)
+    setContrast(100)
+    setSaturation(100)
+    setSepia(0)
+    setBlur(0)
+    setSharpen(0)
+    setTimeout(applyFilters, 50)
   }
 
   const handleDownload = () => {
-    if (!fabricRef.current || !fabricImageRef.current) return
-    
-    fabricRef.current.discardActiveObject()
-    fabricRef.current.renderAll()
-    
-    // Use toDataURL with multiplier for better quality
-    const dataUrl = fabricRef.current.toDataURL({
-      format: 'jpeg',
-      quality: 0.95,
-      multiplier: 2
-    })
+    if (!canvasRef.current) return
     
     const link = document.createElement('a')
     link.download = 'edited-image.jpg'
-    link.href = dataUrl
+    link.href = canvasRef.current.toDataURL('image/jpeg', 0.95)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -281,7 +223,7 @@ function App() {
               type="file"
               accept="image/jpeg,image/png,image/webp"
               onChange={handleUpload}
-              className="w-full text-sm file:mr-2 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+              className="w-full text-sm"
             />
           </div>
 
@@ -291,14 +233,14 @@ function App() {
               <div>
                 <label className="text-sm flex justify-between">
                   <span>Brightness</span>
-                  <span>{brightness}</span>
+                  <span>{brightness}%</span>
                 </label>
                 <input
-                  type="range" min="0" max="100" step="1"
+                  type="range" min="0" max="200" step="1"
                   value={brightness}
                   onChange={(e) => {
                     setBrightness(parseInt(e.target.value))
-                    applyAdjustments()
+                    applyFilters()
                   }}
                   className="w-full"
                 />
@@ -306,14 +248,14 @@ function App() {
               <div>
                 <label className="text-sm flex justify-between">
                   <span>Contrast</span>
-                  <span>{contrast}</span>
+                  <span>{contrast}%</span>
                 </label>
                 <input
-                  type="range" min="0" max="100" step="1"
+                  type="range" min="0" max="200" step="1"
                   value={contrast}
                   onChange={(e) => {
                     setContrast(parseInt(e.target.value))
-                    applyAdjustments()
+                    applyFilters()
                   }}
                   className="w-full"
                 />
@@ -321,44 +263,44 @@ function App() {
               <div>
                 <label className="text-sm flex justify-between">
                   <span>Saturation</span>
-                  <span>{saturation}</span>
+                  <span>{saturation}%</span>
                 </label>
                 <input
-                  type="range" min="0" max="100" step="1"
+                  type="range" min="0" max="200" step="1"
                   value={saturation}
                   onChange={(e) => {
                     setSaturation(parseInt(e.target.value))
-                    applyAdjustments()
+                    applyFilters()
                   }}
                   className="w-full"
                 />
               </div>
               <div>
                 <label className="text-sm flex justify-between">
-                  <span>Temperature</span>
-                  <span>{temperature}</span>
+                  <span>Sepia</span>
+                  <span>{sepia}%</span>
                 </label>
                 <input
                   type="range" min="0" max="100" step="1"
-                  value={temperature}
+                  value={sepia}
                   onChange={(e) => {
-                    setTemperature(parseInt(e.target.value))
-                    applyAdjustments()
+                    setSepia(parseInt(e.target.value))
+                    applyFilters()
                   }}
                   className="w-full"
                 />
               </div>
               <div>
                 <label className="text-sm flex justify-between">
-                  <span>Sharpness</span>
-                  <span>{sharpness}</span>
+                  <span>Blur</span>
+                  <span>{blur}px</span>
                 </label>
                 <input
-                  type="range" min="0" max="100" step="1"
-                  value={sharpness}
+                  type="range" min="0" max="10" step="0.5"
+                  value={blur}
                   onChange={(e) => {
-                    setSharpness(parseInt(e.target.value))
-                    applyAdjustments()
+                    setBlur(parseFloat(e.target.value))
+                    applyFilters()
                   }}
                   className="w-full"
                 />
@@ -380,7 +322,7 @@ function App() {
                 <button
                   key={f.name}
                   onClick={() => handleFilter(f.name)}
-                  disabled={!imageData}
+                  disabled={!imageData || loading}
                   className="text-sm bg-gray-100 py-2 rounded hover:bg-gray-200 disabled:opacity-50"
                 >
                   {f.label}
@@ -393,7 +335,7 @@ function App() {
             <h3 className="font-semibold mb-3">AI Tools</h3>
             <button
               onClick={handleAIEnhance}
-              disabled={!imageData}
+              disabled={!imageData || loading}
               className="w-full bg-purple-500 text-white py-2 rounded hover:bg-purple-600 disabled:opacity-50"
             >
               ✨ Auto Enhance
@@ -402,9 +344,16 @@ function App() {
         </aside>
 
         <div className="flex-1 bg-white rounded-lg shadow p-4">
-          {imageData ? (
-            <div className="flex justify-center">
-              <canvas ref={canvasRef} />
+          {loading ? (
+            <div className="h-96 flex items-center justify-center">
+              <p className="text-gray-500">Loading...</p>
+            </div>
+          ) : imageData ? (
+            <div className="flex justify-center items-center overflow-auto">
+              <canvas 
+                ref={canvasRef} 
+                style={{ maxWidth: '100%', maxHeight: '500px' }}
+              />
             </div>
           ) : (
             <div className="h-96 flex items-center justify-center border-2 border-dashed border-gray-300 rounded-lg">
